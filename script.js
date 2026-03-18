@@ -128,12 +128,13 @@ async function playAudio() {
         if (!audioCtx) initAudioContext();
         if (audioCtx.state === 'suspended') await audioCtx.resume();
         
-        audio.volume = 0; // The "No Distortion" fix
+        // CHANGE THIS LINE: 0.001 instead of 0
+        audio.volume = 0.001; 
+        
         audio.play();
         spindles.forEach(s => s.classList.add('spinning'));
     }
 }
-
 function pauseAudio() {
     audio.pause();
     spindles.forEach(s => s.classList.remove('spinning'));
