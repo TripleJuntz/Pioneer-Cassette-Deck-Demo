@@ -32,7 +32,7 @@ const audio = document.getElementById('audioEngine');
         hissNode.loop = true;
         
         const hissGain = audioCtx.createGain();
-        hissGain.gain.value = 0.012; // Adjusted for subtle "background" hiss
+        hissGain.gain.value = 0.005; // Adjusted for subtle "background" hiss
 
         const hissFilter = audioCtx.createBiquadFilter();
         hissFilter.type = "lowpass";
@@ -40,7 +40,7 @@ const audio = document.getElementById('audioEngine');
 
         // 3. Create "Warmth" (Saturator/Waveshaper)
         saturator = audioCtx.createWaveShaper();
-        saturator.curve = makeDistortionCurve(15); // Subtle saturation
+        saturator.curve = makeDistortionCurve(5); // Subtle saturation
         saturator.oversample = '4x';
 
         // 4. Analog Roll-off (High shelf)
