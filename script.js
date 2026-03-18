@@ -66,7 +66,7 @@ async function initTapeEngine() {
             curve[i] = (3 + amount) * x * 20 * (Math.PI / 180) / (Math.PI + amount * Math.abs(x));
         }
         return curve;
-    })(55); // Noticeable analog thickness
+    })(20); // Noticeable analog thickness
 
     // --- TAPE HISS ---
     const bufferSize = 3 * audioCtx.sampleRate;
