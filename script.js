@@ -142,6 +142,7 @@ function pauseAudio() {
 
 function updateVol() { 
     const val = document.getElementById('volume').value;
+    // We turn up the GainNode (the tape output), NOT the audio element
     if (gainNode) gainNode.gain.value = val;
 }
 
