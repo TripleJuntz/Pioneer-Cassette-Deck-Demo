@@ -1,148 +1,130 @@
 const audio = document.getElementById('audioEngine');
-    const timer = document.getElementById('timer');
-    const fileInput = document.getElementById('fileInput');
-    const meter = document.getElementById('meter');
-    const spindles = document.querySelectorAll('.spindle');
+const timer = document.getElementById('timer');
+const fileInput = document.getElementById('fileInput');
+const meter = document.getElementById('meter');
+const spindles = document.querySelectorAll('.spindle');
 
-    // --- Web Audio API Setup ---
-    let audioCtx;
-    let source;
-    let hissNode;
-    let gainNode;
-    let saturator;
+let audioCtx;
+let source;
+let hissGain;
+let mainGain;
 
-    function initAudioContext() {
-        if (audioCtx) return;
-        
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // 1. Create Source
-        source = audioCtx.createMediaElementSource(audio);
+// 1. Initialize the "Tape Machine" Logic
+function initTapeEngine() {
+    if (audioCtx) return;
 
-        // 2. Create Tape Hiss (White Noise)
-        const bufferSize = 2 * audioCtx.sampleRate;
-        const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-        const output = noiseBuffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-            output[i] = Math.random() * 2 - 1;
-        }
-        
-        hissNode = audioCtx.createBufferSource();
-        hissNode.buffer = noiseBuffer;
-        hissNode.loop = true;
-        
-        const hissGain = audioCtx.createGain();
-        hissGain.gain.value = 0.012; // Adjusted for subtle "background" hiss
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    // Create nodes
+    source = audioCtx.createMediaElementSource(audio);
+    const filter = audioCtx.createBiquadFilter();
+    const saturator = audioCtx.createWaveShaper();
+    const shelf = audioCtx.createBiquadFilter();
+    hissGain = audioCtx.createGain();
+    mainGain = audioCtx.createGain();
 
-        const hissFilter = audioCtx.createBiquadFilter();
-        hissFilter.type = "lowpass";
-        hissFilter.frequency.value = 8000; // Soften the hiss
-
-        // 3. Create "Warmth" (Saturator/Waveshaper)
-        saturator = audioCtx.createWaveShaper();
-        saturator.curve = makeDistortionCurve(15); // Subtle saturation
-        saturator.oversample = '4x';
-
-        // 4. Analog Roll-off (High shelf)
-        const shelf = audioCtx.createBiquadFilter();
-        shelf.type = "highshelf";
-        shelf.frequency.value = 12000;
-        shelf.gain.value = -3; // Slight dip in ultra-highs
-
-        gainNode = audioCtx.createGain();
-
-        // Wiring the Rack:
-        // Hiss Path
-        hissNode.connect(hissFilter);
-        hissFilter.connect(hissGain);
-        hissGain.connect(audioCtx.destination);
-        
-        // Music Path
-        source.connect(saturator);
-        saturator.connect(shelf);
-        shelf.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        hissNode.start();
-    }
-
-    function makeDistortionCurve(amount) {
-        const k = amount;
-        const n_samples = 44100;
-        const curve = new Float32Array(n_samples);
-        const deg = Math.PI / 180;
-        for (let i = 0; i < n_samples; ++i) {
-            const x = i * 2 / n_samples - 1;
-            curve[i] = (3 + k) * x * 20 * deg / (Math.PI + k * Math.abs(x));
+    // --- TAPE WARMTH (Saturator) ---
+    saturator.curve = (function(amount) {
+        let k = amount, n = 44100, curve = new Float32Array(n), x;
+        for (let i = 0; i < n; ++i ) {
+            x = i * 2 / n - 1;
+            curve[i] = (3 + k) * x * 20 * (Math.PI / 180) / (Math.PI + k * Math.abs(x));
         }
         return curve;
-    }
+    })(50); // Increased for noticeable warmth
 
-    // --- Original Logic Enhanced ---
+    // --- TAPE HISS GENERATOR ---
+    const bufferSize = 2 * audioCtx.sampleRate;
+    const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) { output[i] = Math.random() * 2 - 1; }
+    
+    const whiteNoise = audioCtx.createBufferSource();
+    whiteNoise.buffer = noiseBuffer;
+    whiteNoise.loop = true;
 
-    // Setup V-Meter
-    for(let i=0; i<30; i++) {
-        const s = document.createElement('div');
-        s.className = 'seg';
-        meter.appendChild(s);
-    }
-    const segs = document.querySelectorAll('.seg');
+    const hissFilter = audioCtx.createBiquadFilter();
+    hissFilter.type = "lowpass";
+    hissFilter.frequency.value = 7000; // Muffled hiss like real tape
+    hissGain.gain.value = 0.02; // Make it audible for testing
 
-    fileInput.onchange = function(e) {
-        const files = e.target.files;
-        if(files.length > 0) {
-            const url = URL.createObjectURL(files[0]);
-            audio.src = url;
-            document.getElementById('door1').classList.remove('open');
-            document.getElementById('door2').classList.remove('open');
-        }
-    };
+    // --- ANALOG ROLL-OFF ---
+    shelf.type = "highshelf";
+    shelf.frequency.value = 10000;
+    shelf.gain.value = -4; // Dulls the digital "crispness"
 
-    function toggleEject(id) {
-        document.getElementById(id).classList.toggle('open');
-        if(id === 'door1' || id === 'door2') pauseAudio();
-    }
+    // --- CONNECT EVERYTHING ---
+    // Music Path: Source -> Saturator -> Shelf -> Main Gain -> Speakers
+    source.connect(saturator);
+    saturator.connect(shelf);
+    shelf.connect(mainGain);
+    mainGain.connect(audioCtx.destination);
 
-    async function playAudio() {
-        if(audio.src) {
-            if (!audioCtx) initAudioContext();
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
-            
-            audio.play();
-            spindles.forEach(s => s.classList.add('spinning'));
-        } else {
-            alert("Please load a file using the input at the bottom first!");
-        }
-    }
+    // Hiss Path: Noise -> Filter -> Hiss Gain -> Speakers
+    whiteNoise.connect(hissFilter);
+    hissFilter.connect(hissGain);
+    hissGain.connect(audioCtx.destination);
 
-    function pauseAudio() {
-        audio.pause();
-        spindles.forEach(s => s.classList.remove('spinning'));
-    }
+    whiteNoise.start();
+    console.log("Tape Engine Active: Hiss and Saturation engaged.");
+}
 
-    function updateVol() { 
-        const val = document.getElementById('volume').value;
-        if (gainNode) gainNode.gain.value = val;
-        else audio.volume = val; 
-    }
+// --- CONTROLS ---
 
-    function rewind() { audio.currentTime -= 5; }
-    function forward() { audio.currentTime += 5; }
-
-    audio.ontimeupdate = () => {
-        const m = Math.floor(audio.currentTime / 60);
-        const s = Math.floor(audio.currentTime % 60);
-        timer.innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+async function playAudio() {
+    if(audio.src) {
+        await initTapeEngine();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
         
-        if(!audio.paused) {
-            const level = Math.floor(Math.random() * 30);
-            segs.forEach((seg, i) => {
-                seg.className = 'seg';
-                if(i < level) {
-                    seg.classList.add(i > 24 ? 'on-red' : 'on-green');
-                }
-            });
-        }
-    };
+        audio.play();
+        spindles.forEach(s => s.classList.add('spinning'));
+    } else {
+        alert("Load a file first!");
+    }
+}
 
-    audio.onended = () => spindles.forEach(s => s.classList.remove('spinning'));
+function pauseAudio() {
+    audio.pause();
+    spindles.forEach(s => s.classList.remove('spinning'));
+}
+
+function updateVol() {
+    const v = document.getElementById('volume').value;
+    if (mainGain) mainGain.gain.value = v;
+    audio.volume = v;
+}
+
+// --- UI HELPERS (V-Meters) ---
+for(let i=0; i<30; i++) {
+    const s = document.createElement('div');
+    s.className = 'seg';
+    meter.appendChild(s);
+}
+const segs = document.querySelectorAll('.seg');
+
+fileInput.onchange = (e) => {
+    const url = URL.createObjectURL(e.target.files[0]);
+    audio.src = url;
+};
+
+audio.ontimeupdate = () => {
+    const m = Math.floor(audio.currentTime / 60);
+    const s = Math.floor(audio.currentTime % 60);
+    timer.innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+    
+    if(!audio.paused) {
+        const level = Math.floor(Math.random() * 30);
+        segs.forEach((seg, i) => {
+            seg.className = 'seg';
+            if(i < level) seg.classList.add(i > 24 ? 'on-red' : 'on-green');
+        });
+    }
+};
+
+// Functions for the buttons
+function rewind() { audio.currentTime -= 5; }
+function forward() { audio.currentTime += 5; }
+function toggleEject(id) {
+    document.getElementById(id).classList.toggle('open');
+    pauseAudio();
+}
