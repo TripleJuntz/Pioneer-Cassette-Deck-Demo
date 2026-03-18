@@ -4,39 +4,35 @@ const fileInput = document.getElementById('fileInput');
 const meterContainer = document.getElementById('meter');
 const spindles = document.querySelectorAll('.spindle');
 
-let audioCtx, source, hissGain, mainGain, analyser, dataArray, segs;
+let audioCtx, source, hissGain, mainGain, preAmp;
 
-// --- 1. TAPE ENGINE (CLEAN VERSION) ---
+// --- 1. THE "NO-DISTORTION" TAPE ENGINE ---
 async function initTapeEngine() {
     if (audioCtx) return;
 
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     source = audioCtx.createMediaElementSource(audio);
     
-    // ANALOG REPRO HEAD (Subtle High-End Roll-off)
+    // PRE-AMP: Lowering the raw MP3 volume to prevent digital clipping
+    preAmp = audioCtx.createGain();
+    preAmp.gain.value = 0.6; // Reduce input to 60% to create "Headroom"
+
+    // TAPE HEAD (Subtle High-End Roll-off)
     const shelf = audioCtx.createBiquadFilter();
     shelf.type = "highshelf";
-    shelf.frequency.value = 12000;
-    shelf.gain.value = -4; // Dulls the "digital" edge without being muddy
+    shelf.frequency.value = 13000; 
+    shelf.gain.value = -3; 
 
     // WOBBLE (Wow & Flutter)
     const wobble = audioCtx.createDelay();
     const lfo = audioCtx.createOscillator();
     const lfoGain = audioCtx.createGain();
     lfo.type = 'sine';
-    lfo.frequency.value = 0.35; 
-    lfoGain.gain.value = 0.0005; // Very subtle pitch drift
+    lfo.frequency.value = 0.3; 
+    lfoGain.gain.value = 0.0004; 
     lfo.connect(lfoGain);
     lfoGain.connect(wobble.delayTime);
     lfo.start();
-
-    // DYNAMICS (The "Warmth" - replaces the distortion)
-    const compressor = audioCtx.createDynamicsCompressor();
-    compressor.threshold.setValueAtTime(-20, audioCtx.currentTime);
-    compressor.knee.setValueAtTime(40, audioCtx.currentTime);
-    compressor.ratio.setValueAtTime(3, audioCtx.currentTime);
-    compressor.attack.setValueAtTime(0, audioCtx.currentTime);
-    compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
 
     // TAPE HISS
     hissGain = audioCtx.createGain();
@@ -49,18 +45,18 @@ async function initTapeEngine() {
     whiteNoise.loop = true;
     const hissFilter = audioCtx.createBiquadFilter();
     hissFilter.type = "lowpass";
-    hissFilter.frequency.value = 7500;
-    hissGain.gain.value = 0.012; // Audible but background
+    hissFilter.frequency.value = 8000;
+    hissGain.gain.value = 0.01; // Very subtle background hiss
 
-    // MAIN VOLUME
+    // MAIN VOLUME CONTROL
     mainGain = audioCtx.createGain();
-    mainGain.gain.value = 0.7;
+    mainGain.gain.value = 0.8;
 
-    // ROUTING: Source -> Wobble -> Shelf -> Compressor -> Out
-    source.connect(wobble);
+    // ROUTING: Source -> PreAmp -> Wobble -> Shelf -> MainGain -> Out
+    source.connect(preAmp);
+    preAmp.connect(wobble);
     wobble.connect(shelf);
-    shelf.connect(compressor);
-    compressor.connect(mainGain);
+    shelf.connect(mainGain);
     mainGain.connect(audioCtx.destination);
 
     // Hiss Path
@@ -104,4 +100,6 @@ audio.ontimeupdate = () => {
 function rewind() { audio.currentTime -= 5; }
 function forward() { audio.currentTime += 5; }
 function toggleEject(id) {
-    document.getElementById(id).classList.
+    document.getElementById(id).classList.toggle('open');
+    pauseAudio();
+}
