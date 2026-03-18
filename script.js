@@ -1,40 +1,29 @@
 const audio = document.getElementById('audioEngine');
 const timer = document.getElementById('timer');
 const fileInput = document.getElementById('fileInput');
-const meterContainer = document.getElementById('meter');
 const spindles = document.querySelectorAll('.spindle');
 
-let audioCtx, source, hissGain, mainGain, preAmp;
+let audioCtx, source, hissGain, mainGain;
 
-// --- 1. THE "NO-DISTORTION" TAPE ENGINE ---
 async function initTapeEngine() {
     if (audioCtx) return;
 
+    // 1. Start the Audio Context
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    // 2. Create the source
     source = audioCtx.createMediaElementSource(audio);
     
-    // PRE-AMP: Lowering the raw MP3 volume to prevent digital clipping
-    preAmp = audioCtx.createGain();
-    preAmp.gain.value = 0.6; // Reduce input to 60% to create "Headroom"
+    // 3. THE FIX: Reduce the volume of the RAW audio element to 0
+    // This stops the "Double Sound" that causes the distortion.
+    // The Web Audio API will still get the signal, but the browser won't play the 'raw' version.
+    audio.volume = 0; 
 
-    // TAPE HEAD (Subtle High-End Roll-off)
-    const shelf = audioCtx.createBiquadFilter();
-    shelf.type = "highshelf";
-    shelf.frequency.value = 13000; 
-    shelf.gain.value = -3; 
+    // 4. Create a "Safe" Gain Node (The Pre-Amp)
+    const safeGain = audioCtx.createGain();
+    safeGain.gain.value = 0.5; // Start at 50% to be safe
 
-    // WOBBLE (Wow & Flutter)
-    const wobble = audioCtx.createDelay();
-    const lfo = audioCtx.createOscillator();
-    const lfoGain = audioCtx.createGain();
-    lfo.type = 'sine';
-    lfo.frequency.value = 0.3; 
-    lfoGain.gain.value = 0.0004; 
-    lfo.connect(lfoGain);
-    lfoGain.connect(wobble.delayTime);
-    lfo.start();
-
-    // TAPE HISS
+    // 5. Tape Hiss (The Vibe)
     hissGain = audioCtx.createGain();
     const bufferSize = 2 * audioCtx.sampleRate;
     const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
@@ -46,20 +35,19 @@ async function initTapeEngine() {
     const hissFilter = audioCtx.createBiquadFilter();
     hissFilter.type = "lowpass";
     hissFilter.frequency.value = 8000;
-    hissGain.gain.value = 0.01; // Very subtle background hiss
+    hissGain.gain.value = 0.01;
 
-    // MAIN VOLUME CONTROL
+    // 6. Main Output
     mainGain = audioCtx.createGain();
     mainGain.gain.value = 0.8;
 
-    // ROUTING: Source -> PreAmp -> Wobble -> Shelf -> MainGain -> Out
-    source.connect(preAmp);
-    preAmp.connect(wobble);
-    wobble.connect(shelf);
-    shelf.connect(mainGain);
+    // 7. Connect it all
+    // Source -> SafeGain -> MainGain -> Speakers
+    source.connect(safeGain);
+    safeGain.connect(mainGain);
     mainGain.connect(audioCtx.destination);
 
-    // Hiss Path
+    // Hiss -> HissGain -> Speakers
     whiteNoise.connect(hissFilter);
     hissFilter.connect(hissGain);
     hissGain.connect(audioCtx.destination);
@@ -67,7 +55,7 @@ async function initTapeEngine() {
     whiteNoise.start();
 }
 
-// --- 2. CONTROLS ---
+// --- PLAYER CONTROLS ---
 async function playAudio() {
     if(audio.src) {
         if (!audioCtx) await initTapeEngine();
@@ -84,6 +72,7 @@ function pauseAudio() {
 
 function updateVol() {
     const v = document.getElementById('volume').value;
+    // We update our Gain Node, NOT the audio.volume (keep that at 0!)
     if (mainGain) mainGain.gain.value = v;
 }
 
