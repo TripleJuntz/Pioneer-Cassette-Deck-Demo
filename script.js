@@ -3,65 +3,52 @@ const timer = document.getElementById('timer');
 const fileInput = document.getElementById('fileInput');
 const spindles = document.querySelectorAll('.spindle');
 
-let audioCtx, source, hissGain, mainGain;
+let audioCtx, hissNode, hissGain;
 
-async function initTapeEngine() {
+// --- 1. SEPARATE HISS ENGINE ---
+// This ONLY handles the noise, it doesn't touch your MP3 signal
+function initHiss() {
     if (audioCtx) return;
 
-    // 1. Start the Audio Context
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     
-    // 2. Create the source
-    source = audioCtx.createMediaElementSource(audio);
-    
-    // 3. THE FIX: Reduce the volume of the RAW audio element to 0
-    // This stops the "Double Sound" that causes the distortion.
-    // The Web Audio API will still get the signal, but the browser won't play the 'raw' version.
-    audio.volume = 0; 
-
-    // 4. Create a "Safe" Gain Node (The Pre-Amp)
-    const safeGain = audioCtx.createGain();
-    safeGain.gain.value = 0.5; // Start at 50% to be safe
-
-    // 5. Tape Hiss (The Vibe)
-    hissGain = audioCtx.createGain();
+    // Create Noise Buffer
     const bufferSize = 2 * audioCtx.sampleRate;
     const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const output = noiseBuffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) { output[i] = Math.random() * 2 - 1; }
-    const whiteNoise = audioCtx.createBufferSource();
-    whiteNoise.buffer = noiseBuffer;
-    whiteNoise.loop = true;
-    const hissFilter = audioCtx.createBiquadFilter();
-    hissFilter.type = "lowpass";
-    hissFilter.frequency.value = 8000;
-    hissGain.gain.value = 0.01;
+    
+    hissNode = audioCtx.createBufferSource();
+    hissNode.buffer = noiseBuffer;
+    hissNode.loop = true;
 
-    // 6. Main Output
-    mainGain = audioCtx.createGain();
-    mainGain.gain.value = 0.8;
+    // Filter to make it sound like tape (muffled)
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 7000;
 
-    // 7. Connect it all
-    // Source -> SafeGain -> MainGain -> Speakers
-    source.connect(safeGain);
-    safeGain.connect(mainGain);
-    mainGain.connect(audioCtx.destination);
+    hissGain = audioCtx.createGain();
+    hissGain.gain.value = 0.012; // Start very low
 
-    // Hiss -> HissGain -> Speakers
-    whiteNoise.connect(hissFilter);
-    hissFilter.connect(hissGain);
+    hissNode.connect(filter);
+    filter.connect(hissGain);
     hissGain.connect(audioCtx.destination);
-
-    whiteNoise.start();
+    
+    hissNode.start();
 }
 
-// --- PLAYER CONTROLS ---
+// --- 2. CLEAN CONTROLS ---
 async function playAudio() {
     if(audio.src) {
-        if (!audioCtx) await initTapeEngine();
+        // Start the hiss
+        initHiss();
         if (audioCtx.state === 'suspended') await audioCtx.resume();
+        
+        // Play the MP3 normally (No processing = No distortion)
         audio.play();
         spindles.forEach(s => s.classList.add('spinning'));
+    } else {
+        alert("Load a file first!");
     }
 }
 
@@ -71,11 +58,12 @@ function pauseAudio() {
 }
 
 function updateVol() {
+    // Standard volume control
     const v = document.getElementById('volume').value;
-    // We update our Gain Node, NOT the audio.volume (keep that at 0!)
-    if (mainGain) mainGain.gain.value = v;
+    audio.volume = v;
 }
 
+// --- 3. UTILITIES ---
 fileInput.onchange = (e) => {
     audio.src = URL.createObjectURL(e.target.files[0]);
 };
@@ -83,12 +71,4 @@ fileInput.onchange = (e) => {
 audio.ontimeupdate = () => {
     const m = Math.floor(audio.currentTime / 60);
     const s = Math.floor(audio.currentTime % 60);
-    timer.innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-};
-
-function rewind() { audio.currentTime -= 5; }
-function forward() { audio.currentTime += 5; }
-function toggleEject(id) {
-    document.getElementById(id).classList.toggle('open');
-    pauseAudio();
-}
+    timer.innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2
