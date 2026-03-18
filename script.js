@@ -1,103 +1,150 @@
+/**
+ * PIONEER CT-W606DR TAPE ENGINE
+ * Features: Web Audio API, Tape Hiss, Saturation, Wow/Flutter, Real-time V-Meter
+ */
+
 const audio = document.getElementById('audioEngine');
 const timer = document.getElementById('timer');
 const fileInput = document.getElementById('fileInput');
-const meter = document.getElementById('meter');
+const meterContainer = document.getElementById('meter');
 const spindles = document.querySelectorAll('.spindle');
 
-let audioCtx, source, hissGain, gainNode, saturator, dolbyOn = false;
+let audioCtx, source, hissGain, mainGain, analyser, dataArray, segs;
 
-// 1. Setup Visual Meter
-for(let i=0; i<30; i++) {
-    const s = document.createElement('div');
-    s.className = 'seg';
-    meter.appendChild(s);
+// --- 1. INITIALIZE UI METERS ---
+function buildMeters() {
+    if (!meterContainer) return;
+    meterContainer.innerHTML = ''; 
+    for(let i = 0; i < 30; i++) {
+        const s = document.createElement('div');
+        s.className = 'seg';
+        meterContainer.appendChild(s);
+    }
+    segs = document.querySelectorAll('.seg');
 }
-const segs = document.querySelectorAll('.seg');
 
-// 2. The Engine
-async function initAudioContext() {
+// Build immediately and also on window load as a backup
+buildMeters();
+window.onload = buildMeters;
+
+// --- 2. THE ANALOG TAPE ENGINE ---
+async function initTapeEngine() {
     if (audioCtx) return;
-    
-    // Create Context
+
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     
-    // CHROMEBOOK FIX: Force the audio element to allow cross-origin data
-    audio.crossOrigin = "anonymous";
-    
+    // Create Media Source
     source = audioCtx.createMediaElementSource(audio);
+    
+    // Analyser for real-time meters
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 128; // Increased for better accuracy
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-    // Hiss Generation
-    const bufferSize = 2 * audioCtx.sampleRate;
+    // Audio Nodes
+    const saturator = audioCtx.createWaveShaper();
+    const shelf = audioCtx.createBiquadFilter();
+    const wobble = audioCtx.createDelay();
+    hissGain = audioCtx.createGain();
+    mainGain = audioCtx.createGain();
+
+    // --- WOW & FLUTTER (Speed Drift) ---
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.45; 
+    lfoGain.gain.value = 0.0007; 
+    lfo.connect(lfoGain);
+    lfoGain.connect(wobble.delayTime);
+    lfo.start();
+
+    // --- TAPE SATURATION (Warmth) ---
+    saturator.curve = (function(amount) {
+        let n = 44100, curve = new Float32Array(n), x;
+        for (let i = 0; i < n; ++i ) {
+            x = i * 2 / n - 1;
+            curve[i] = (3 + amount) * x * 20 * (Math.PI / 180) / (Math.PI + amount * Math.abs(x));
+        }
+        return curve;
+    })(55); // Noticeable analog thickness
+
+    // --- TAPE HISS ---
+    const bufferSize = 3 * audioCtx.sampleRate;
     const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const output = noiseBuffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) { output[i] = Math.random() * 2 - 1; }
     
-    const hissSource = audioCtx.createBufferSource();
-    hissSource.buffer = noiseBuffer;
-    hissSource.loop = true;
+    const whiteNoise = audioCtx.createBufferSource();
+    whiteNoise.buffer = noiseBuffer;
+    whiteNoise.loop = true;
     
-    hissGain = audioCtx.createGain();
-    hissGain.gain.value = 0.005; 
+    const hissFilter = audioCtx.createBiquadFilter();
+    hissFilter.type = "lowpass";
+    hissFilter.frequency.value = 6000;
+    hissGain.gain.value = 0.018; 
 
-    // Tape Effects
-    saturator = audioCtx.createWaveShaper();
-    saturator.curve = makeDistortionCurve(5);
-    
-    const shelf = audioCtx.createBiquadFilter();
+    // --- ANALOG SHELF (Rolls off digital sharpness) ---
     shelf.type = "highshelf";
-    shelf.frequency.value = 12000;
-    shelf.gain.value = -1;
+    shelf.frequency.value = 10500;
+    shelf.gain.value = -6;
 
-    gainNode = audioCtx.createGain();
-    gainNode.gain.value = document.getElementById('volume').value;
-
-    // Routing
-    source.connect(saturator);
+    // --- SIGNAL ROUTING ---
+    // Music Path
+    source.connect(wobble);
+    wobble.connect(saturator);
     saturator.connect(shelf);
-    shelf.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    
-    hissSource.connect(hissGain);
+    shelf.connect(analyser);
+    analyser.connect(mainGain);
+    mainGain.connect(audioCtx.destination);
+
+    // Hiss Path
+    whiteNoise.connect(hissFilter);
+    hissFilter.connect(hissGain);
     hissGain.connect(audioCtx.destination);
 
-    hissSource.start();
+    whiteNoise.start();
+    drawMeter();
 }
 
-function makeDistortionCurve(amount) {
-    const k = amount;
-    const n_samples = 44100;
-    const curve = new Float32Array(n_samples);
-    for (let i = 0; i < n_samples; ++i) {
-        const x = i * 2 / n_samples - 1;
-        curve[i] = (3 + k) * x * 20 * (Math.PI / 180) / (Math.PI + k * Math.abs(x));
-    }
-    return curve;
-}
-
-// 3. Controls
-async function playAudio() {
-    if (!audio.src) {
-        alert("Load a file first!");
+// --- 3. ANIMATION LOOP ---
+function drawMeter() {
+    requestAnimationFrame(drawMeter);
+    
+    if (!analyser || audio.paused || !segs) {
+        if (segs) segs.forEach(s => s.classList.remove('on-green', 'on-red'));
         return;
     }
 
-    if (!audioCtx) await initAudioContext();
+    analyser.getByteFrequencyData(dataArray);
     
-    // CHROMEBOOK FIX: Always resume context on play
-    if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-    }
+    // Calculate average volume from the low/mid frequencies
+    let sum = 0;
+    let count = 15; // Only look at the first 15 frequency bins for punchier response
+    for(let i = 0; i < count; i++) { sum += dataArray[i]; }
+    let average = sum / count;
+    
+    // Scale 0-255 to 0-30 segments
+    let level = Math.floor((average / 140) * 30); 
 
-    // Use a very low volume for the raw tag to keep the engine alive 
-    // without causing double-audio distortion
-    audio.volume = 0.01; 
-    
-    audio.play().catch(err => {
-        console.error("Playback blocked:", err);
-        alert("Click the page first, then hit Play.");
+    segs.forEach((seg, i) => {
+        seg.className = 'seg';
+        if(i < level) {
+            seg.classList.add(i > 23 ? 'on-red' : 'on-green');
+        }
     });
+}
 
-    spindles.forEach(s => s.classList.add('spinning'));
+// --- 4. PLAYER CONTROLS ---
+async function playAudio() {
+    if(audio.src) {
+        if (!audioCtx) await initTapeEngine();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        
+        audio.play();
+        spindles.forEach(s => s.classList.add('spinning'));
+    } else {
+        alert("Please load an MP3 file first!");
+    }
 }
 
 function pauseAudio() {
@@ -106,31 +153,16 @@ function pauseAudio() {
 }
 
 function updateVol() {
-    const val = document.getElementById('volume').value;
-    if (gainNode) gainNode.gain.value = val;
-}
-
-function toggleDolby() {
-    const btn = document.getElementById('dolbyBtn');
-    if (!hissGain) return;
-    dolbyOn = !dolbyOn;
-    if (dolbyOn) {
-        hissGain.gain.setTargetAtTime(0.001, audioCtx.currentTime, 0.1);
-        btn.style.color = "var(--pioneer-gold)";
-        btn.innerText = "DOLBY NR: ON";
-    } else {
-        hissGain.gain.setTargetAtTime(0.005, audioCtx.currentTime, 0.1);
-        btn.style.color = "#888";
-        btn.innerText = "DOLBY NR: OFF";
-    }
+    const v = document.getElementById('volume').value;
+    if (mainGain) mainGain.gain.value = v;
+    audio.volume = v;
 }
 
 fileInput.onchange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-        audio.src = URL.createObjectURL(file);
-        // Reset spindles if a new tape is loaded
-        spindles.forEach(s => s.classList.remove('spinning'));
+    if (e.target.files.length > 0) {
+        audio.src = URL.createObjectURL(e.target.files[0]);
+        // Auto-close doors visually
+        document.querySelectorAll('.cassette-door').forEach(d => d.classList.remove('open'));
     }
 };
 
@@ -138,15 +170,12 @@ audio.ontimeupdate = () => {
     const m = Math.floor(audio.currentTime / 60);
     const s = Math.floor(audio.currentTime % 60);
     timer.innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-    
-    if(!audio.paused) {
-        const level = Math.floor(Math.random() * 30);
-        segs.forEach((seg, i) => {
-            seg.className = 'seg' + (i < level ? (i > 24 ? ' on-red' : ' on-green') : '');
-        });
-    }
 };
 
 function rewind() { audio.currentTime -= 5; }
 function forward() { audio.currentTime += 5; }
-function toggleEject(id) { document.getElementById(id).classList.toggle('open'); pauseAudio(); }
+
+function toggleEject(id) {
+    document.getElementById(id).classList.toggle('open');
+    pauseAudio();
+}
