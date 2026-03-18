@@ -104,16 +104,15 @@ const audio = document.getElementById('audioEngine');
     }
 
     async function playAudio() {
-        if(audio.src) {
-            if (!audioCtx) initAudioContext();
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
-            
-            audio.play();
-            spindles.forEach(s => s.classList.add('spinning'));
-        } else {
-            alert("Please load a file using the input at the bottom first!");
-        }
+    if(audio.src) {
+        if (!audioCtx) initAudioContext();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        
+        audio.volume = 0; // ADD THIS LINE: Mutes the raw MP3 so you only hear the 'Tape'
+        audio.play();
+        spindles.forEach(s => s.classList.add('spinning'));
     }
+}
 
     function pauseAudio() {
         audio.pause();
